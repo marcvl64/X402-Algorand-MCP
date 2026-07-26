@@ -14,8 +14,26 @@ import {
   toEndpointSummary,
   toMerchantSummary,
 } from './discovery.js';
-import { PaymentService } from './x402/payment.js';
+import {
+  ALGORAND_MAINNET_CAIP2,
+  ALGORAND_TESTNET_CAIP2,
+  PaymentService,
+  SUPPORTED_NETWORKS,
+} from './x402/payment.js';
 import { PendingPaymentStore } from './x402/pending.js';
+
+/**
+ * Accepts friendly aliases as well as full CAIP-2 ids. Algorand's CAIP-2 form
+ * embeds a base64 genesis hash containing "/" and "=", which is unpleasant to
+ * type and easy to mangle, so agents should rarely need to.
+ */
+function resolveNetwork(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const alias = value.trim().toLowerCase();
+  if (alias === 'mainnet' || alias === 'algorand-mainnet') return ALGORAND_MAINNET_CAIP2;
+  if (alias === 'testnet' || alias === 'algorand-testnet') return ALGORAND_TESTNET_CAIP2;
+  return value;
+}
 
 export const SERVER_NAME = 'x402-algorand-mcp';
 export const SERVER_VERSION = '0.1.0';
@@ -93,15 +111,16 @@ export function createServer(deps: ServerDeps): McpServer {
       network: z
         .string()
         .optional()
-        .describe('CAIP-2 network filter. Defaults to Algorand networks only.'),
+        .describe('"mainnet", "testnet", or a full CAIP-2 id. Defaults to all Algorand networks.'),
       limit: z.number().int().min(1).max(100).optional().describe('Results per page (max 100)'),
       offset: z.number().int().min(0).optional().describe('Pagination offset'),
     },
     guard(async (args) => {
+      const network = resolveNetwork(args.network);
       const response = await discovery.listMerchants({
         ...(args.search !== undefined ? { search: args.search } : {}),
         ...(args.category !== undefined ? { category: args.category } : {}),
-        ...(args.network !== undefined ? { network: args.network } : {}),
+        ...(network !== undefined ? { network } : {}),
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
         ...(args.offset !== undefined ? { offset: args.offset } : {}),
       });
@@ -130,16 +149,20 @@ export function createServer(deps: ServerDeps): McpServer {
         .enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
         .optional()
         .describe('Filter by HTTP method'),
-      network: z.string().optional().describe('CAIP-2 network filter'),
+      network: z
+        .string()
+        .optional()
+        .describe('"mainnet", "testnet", or a full CAIP-2 id'),
       limit: z.number().int().min(1).max(100).optional().describe('Results per page (max 100)'),
       offset: z.number().int().min(0).optional().describe('Pagination offset'),
     },
     guard(async (args) => {
+      const network = resolveNetwork(args.network);
       const response = await discovery.listResources({
         ...(args.merchant_id !== undefined ? { merchantId: args.merchant_id } : {}),
         ...(args.search !== undefined ? { search: args.search } : {}),
         ...(args.method !== undefined ? { method: args.method } : {}),
-        ...(args.network !== undefined ? { network: args.network } : {}),
+        ...(network !== undefined ? { network } : {}),
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
         ...(args.offset !== undefined ? { offset: args.offset } : {}),
       });
@@ -181,14 +204,25 @@ export function createServer(deps: ServerDeps): McpServer {
       payer_address: z
         .string()
         .describe('Algorand address that will pay. Must match the wallet that will sign.'),
+      network: z
+        .enum(['mainnet', 'testnet'])
+        .or(z.string())
+        .optional()
+        .describe(
+          'Pin the payment to one Algorand network: "mainnet", "testnet", or a full CAIP-2 id. ' +
+            'Fails if the endpoint does not accept it, rather than paying elsewhere. ' +
+            'Omit to use the server default.',
+        ),
       method: z.string().optional().describe('HTTP method (default GET)'),
       headers: z.record(z.string()).optional().describe('Extra request headers'),
       body: z.string().optional().describe('Request body, for POST/PUT/PATCH'),
     },
     guard(async (args) => {
+      const network = resolveNetwork(args.network);
       const result = await payments.prepare({
         url: args.url,
         payerAddress: args.payer_address,
+        ...(network !== undefined ? { network } : {}),
         ...(args.method !== undefined ? { method: args.method } : {}),
         ...(args.headers !== undefined ? { headers: args.headers } : {}),
         ...(args.body !== undefined ? { body: args.body } : {}),
@@ -233,6 +267,8 @@ export function createServer(deps: ServerDeps): McpServer {
       json({
         facilitator_url: config.facilitatorUrl,
         default_network: config.defaultNetwork,
+        supported_networks: SUPPORTED_NETWORKS,
+        network_aliases: { mainnet: ALGORAND_MAINNET_CAIP2, testnet: ALGORAND_TESTNET_CAIP2 },
         algod_url: config.algodUrl,
         max_amount_atomic: config.maxAmountAtomic.toString(),
         allowed_assets:

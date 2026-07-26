@@ -53,6 +53,23 @@ export class NoAlgorandOptionError extends Error {
 }
 
 /**
+ * Raised when the caller pinned a network the endpoint does not accept. Kept
+ * distinct from falling back silently: paying on a different chain than the one
+ * asked for is never a safe assumption.
+ */
+export class NetworkUnavailableError extends Error {
+  readonly code = 'requested_network_unavailable' as const;
+  constructor(requested: string, offered: readonly string[]) {
+    super(
+      `Endpoint does not accept payment on ${requested}. It accepts: ${
+        offered.length > 0 ? offered.join(', ') : 'no Algorand network'
+      }.`,
+    );
+    this.name = 'NetworkUnavailableError';
+  }
+}
+
+/**
  * Server-side spend guardrails, applied before any signing request is emitted.
  *
  * These bound what the server will ever ask to be signed. They are a backstop,
@@ -143,13 +160,25 @@ export interface RequestSpec {
   readonly headers?: Record<string, string>;
   readonly body?: string;
   readonly payerAddress: string;
+  /**
+   * Pin the payment to one Algorand network. Unlike the configured default —
+   * which is only a preference and falls back to whatever the endpoint offers —
+   * this is a hard requirement and fails if unavailable.
+   */
+  readonly network?: string;
 }
+
+export const ALGORAND_MAINNET_CAIP2 = 'algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=';
+export const ALGORAND_TESTNET_CAIP2 = 'algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=';
 
 /** Public AlgoNode endpoints, used unless the operator overrides ALGOD_URL. */
 const ALGOD_DEFAULTS: Record<string, string> = {
-  'algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=': 'https://mainnet-api.algonode.cloud',
-  'algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=': 'https://testnet-api.algonode.cloud',
+  [ALGORAND_MAINNET_CAIP2]: 'https://mainnet-api.algonode.cloud',
+  [ALGORAND_TESTNET_CAIP2]: 'https://testnet-api.algonode.cloud',
 };
+
+/** Networks a caller may pin on a per-request basis. */
+export const SUPPORTED_NETWORKS = [ALGORAND_MAINNET_CAIP2, ALGORAND_TESTNET_CAIP2] as const;
 
 export class PaymentService {
   constructor(
@@ -188,7 +217,11 @@ export class PaymentService {
       selected !== undefined ? { requirements: selected } : {},
     );
 
-    const networks = [this.config.defaultNetwork, ...Object.keys(ALGOD_DEFAULTS)];
+    const networks = [
+      ...(spec.network !== undefined ? [spec.network] : []),
+      this.config.defaultNetwork,
+      ...Object.keys(ALGOD_DEFAULTS),
+    ];
     const client = x402Client.fromConfig({
       schemes: [...new Set(networks)].map((network) => ({
         // CAIP-2 identifiers always contain a colon, satisfying `Network`.
@@ -202,8 +235,22 @@ export class PaymentService {
         if (algorand.length === 0) {
           throw new NoAlgorandOptionError(accepts.map((a) => a.network));
         }
-        const chosen =
-          algorand.find((a) => a.network === this.config.defaultNetwork) ?? algorand[0]!;
+
+        let chosen: PaymentRequirements;
+        if (spec.network !== undefined) {
+          // Explicitly pinned: never silently pay on a different network.
+          const match = algorand.find((a) => a.network === spec.network);
+          if (!match) {
+            throw new NetworkUnavailableError(
+              spec.network,
+              algorand.map((a) => a.network),
+            );
+          }
+          chosen = match;
+        } else {
+          chosen = algorand.find((a) => a.network === this.config.defaultNetwork) ?? algorand[0]!;
+        }
+
         enforcePolicy(this.config, chosen);
         selected = chosen;
         return chosen;

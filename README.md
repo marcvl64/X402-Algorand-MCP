@@ -82,23 +82,83 @@ and this server can only pay on Algorand.
 
 ```sh
 pnpm install
-cp .env.example .env     # defaults point at Algorand MainNet via GoPlausible
+cp .env.example .env     # optional; sensible defaults apply without it
 pnpm build
 pnpm start               # Streamable HTTP on :3000/mcp
 ```
 
-For local development against a desktop MCP client:
+## Choosing a network
 
-```sh
-pnpm start:stdio
+Network is chosen **per call**, not baked into the deployment. Pass `network` to any tool as
+`"mainnet"`, `"testnet"`, or a full CAIP-2 id:
+
+```jsonc
+{ "url": "https://…", "payer_address": "XJCC…", "network": "testnet" }
 ```
 
-Verify it end to end against the live catalog — this stops at the point where signable bytes are
-produced, so it never spends:
+If the endpoint does not accept the network you pinned, the call **fails** rather than paying on a
+different chain:
+
+```
+Endpoint does not accept payment on algorand:SGO1GKSz…
+It accepts: algorand:wGHE2Pwd…
+```
+
+Omit `network` and the server uses `X402_DEFAULT_NETWORK` as a *preference*, falling back to
+whatever the endpoint offers. The catalog currently holds ~643 MainNet and ~37 TestNet endpoints;
+TestNet ones price in TestNet USDC (ASA `10458941`), so they cost nothing real to exercise.
+
+## Testing locally
+
+The server runs over stdio, so you can attach it to any desktop MCP client as a local server.
+
+**Claude Code:**
 
 ```sh
-pnpm build && node scripts/smoke.mjs
+pnpm build
+claude mcp add x402-algorand -e MCP_TRANSPORT=stdio -- node "$PWD/dist/index.js"
 ```
+
+**Claude Desktop** — add to `claude_desktop_config.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "x402-algorand": {
+      "command": "node",
+      "args": ["/absolute/path/to/X402-Algorand-MCP/dist/index.js"],
+      "env": { "MCP_TRANSPORT": "stdio" }
+    }
+  }
+}
+```
+
+Then ask it things like *"what x402 merchants are available on Algorand?"* or *"what does merchant
+X offer?"*.
+
+> An MCP client spawns the server with its own working directory, so a `.env` file will not be
+> picked up. Pass configuration through the client's `env` block instead. `pnpm start` and
+> `pnpm start:stdio` do read `.env`, since they run from the project root.
+
+**Without a client**, exercise everything end to end against the live catalog. This stops at the
+point where signable bytes are produced, so it never spends:
+
+```sh
+pnpm build && pnpm smoke
+# or pin a network and endpoint:
+node scripts/smoke.mjs <payerAddress> https://gateway-x402.vercel.app/discover
+```
+
+Any syntactically valid Algorand address works for `prepare_payment` — the transaction group is
+built but never signed or submitted.
+
+### Testing a real payment
+
+Completing a payment needs a signer, which this server deliberately does not have. To close the loop
+on TestNet: take `signing_requests[].payload_base64`, sign those raw bytes with Ed25519 using a
+TestNet key (funded from the [dispenser](https://bank.testnet.algorand.network/) and opted in to ASA
+`10458941`), then call `submit_payment` with the base64 signature. Sign the bytes **directly** — do
+not re-wrap them in a transaction.
 
 ## Configuration
 
@@ -107,8 +167,8 @@ See [`.env.example`](./.env.example). The values worth knowing:
 | Variable | Default | Notes |
 |---|---|---|
 | `X402_FACILITATOR_URL` | `https://facilitator.goplausible.xyz` | Backs all discovery. |
-| `X402_DEFAULT_NETWORK` | Algorand MainNet CAIP-2 | Standard base64 genesis hash — contains `/` and a trailing `=`, not the URL-safe variant. |
-| `ALGOD_URL` | AlgoNode MainNet | Must match `X402_DEFAULT_NETWORK`. |
+| `X402_DEFAULT_NETWORK` | Algorand MainNet CAIP-2 | Only a *default* — callers override it per request. Standard base64 genesis hash: contains `/` and a trailing `=`, not the URL-safe variant. |
+| `ALGOD_URL` | AlgoNode MainNet | Used for `X402_DEFAULT_NETWORK`; other networks fall back to public AlgoNode endpoints. |
 | `X402_MAX_AMOUNT_ATOMIC` | `1000000` | Server-side spend ceiling, in atomic units. |
 | `X402_ALLOWED_ASSETS` | *(any)* | Comma-separated ASA IDs. |
 | `X402_PENDING_TTL_MS` | `300000` | How long a prepared payment waits for signatures. |
