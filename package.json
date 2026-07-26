@@ -1,0 +1,38 @@
+{
+  "name": "x402-algorand-mcp",
+  "version": "0.1.0",
+  "description": "Remote MCP server for discovering x402 endpoints on Algorand and paying for them via an AC2-connected wallet",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./dist/index.js",
+  "bin": {
+    "x402-algorand-mcp": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "start:stdio": "MCP_TRANSPORT=stdio node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@algorandfoundation/algokit-utils": "10.0.0-beta.4",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@x402/avm": "^2.19.0",
+    "@x402/core": "^2.19.0",
+    "@x402/extensions": "^2.19.0",
+    "@x402/fetch": "^2.19.0",
+    "express": "^5.0.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "~5.8.3",
+    "vitest": "^3.2.0"
+  }
+}
