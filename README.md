@@ -179,10 +179,38 @@ and is the only party that can actually authorize a spend.
 ## Deployment
 
 The server keeps prepared payments in memory between `prepare_payment` and `submit_payment`, so an
-MCP session must keep reaching the same instance. Run a single instance, or use sticky sessions
-behind a load balancer.
+MCP session must keep reaching the same instance. **Run a single instance**, or use sticky sessions
+behind a load balancer. That rules out serverless platforms — a suspended in-flight request cannot
+be frozen and revived on another invocation.
 
-It has no native dependencies and needs no WebRTC, so it runs anywhere Node 20+ does.
+It has no native dependencies and needs no WebRTC, so it runs anywhere Node 20.12+ does.
+
+### Fly.io
+
+[`fly.toml`](./fly.toml) and the [`Dockerfile`](./Dockerfile) are ready to go:
+
+```sh
+fly launch --no-deploy    # first time only; keep the existing fly.toml
+fly deploy
+```
+
+`auto_stop_machines = false` and `min_machines_running = 1` are set deliberately: a stopped machine
+loses every parked payment, and an MCP session's SSE stream dies with it.
+
+Verify the image locally before pushing, which is faster than debugging a remote build:
+
+```sh
+docker build -t x402-algorand-mcp .
+docker run --rm -p 3000:3000 x402-algorand-mcp
+curl localhost:3000/health
+```
+
+### pnpm version pinning
+
+`packageManager` pins pnpm to the version that wrote `pnpm-lock.yaml`. Without it, Corepack installs
+whatever is current — recent pnpm reads `onlyBuiltDependencies` from `pnpm-workspace.yaml` rather
+than `package.json`, so a container would fail `pnpm install` with `ERR_PNPM_IGNORED_BUILDS` while
+the same command succeeded locally. Bump the pin and the lockfile together.
 
 ## Development
 

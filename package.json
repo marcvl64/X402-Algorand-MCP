@@ -11,6 +11,7 @@
   "engines": {
     "node": ">=20.12"
   },
+  "packageManager": "pnpm@10.30.0",
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -35,5 +36,11 @@
     "@types/node": "^22.0.0",
     "typescript": "~5.8.3",
     "vitest": "^3.2.0"
+  },
+  "pnpm": {
+    "//": "pnpm 10 blocks dependency build scripts by default and fails hard in CI unless the choice is recorded. esbuild's postinstall links its platform binary; it reaches us only via vitest.",
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

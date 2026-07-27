@@ -1,0 +1,42 @@
+app = "x402-algorand-mcp"
+primary_region = "iad"
+
+[build]
+
+[env]
+  MCP_TRANSPORT = "http"
+  PORT = "3000"
+  X402_FACILITATOR_URL = "https://facilitator.goplausible.xyz"
+  X402_DEFAULT_NETWORK = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="
+  ALGOD_URL = "https://mainnet-api.algonode.cloud"
+  # Spend ceiling in atomic units. A backstop only — the server holds no keys
+  # and nothing can be spent without an external signature.
+  X402_MAX_AMOUNT_ATOMIC = "1000000"
+  X402_PENDING_TTL_MS = "300000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+
+  # A prepared payment lives in memory on one instance until its signatures
+  # arrive, and MCP sessions hold an open SSE stream. Both break if a session
+  # is load-balanced elsewhere, so the machine must stay up and stay single.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
