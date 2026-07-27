@@ -14,6 +14,15 @@ handing the server a key.
                                (AC2-paired wallet · wallet MCP · local key)
 ```
 
+**Try it now** — a public instance runs at `https://x402-algorand-mcp.fly.dev/mcp`:
+
+```sh
+claude mcp add --transport http x402-algorand https://x402-algorand-mcp.fly.dev/mcp
+```
+
+See [Connecting to it](#connecting-to-it) for other clients, running it locally, or deploying your
+own.
+
 ## What it does
 
 **Discovery.** Every x402 payment is verified and settled through a facilitator, so the facilitator
@@ -78,14 +87,86 @@ expires (default 5 minutes; the validity window makes anything longer useless).
 Discovery results are filtered to Algorand: the catalog spans every chain the facilitator serves,
 and this server can only pay on Algorand.
 
-## Quick start
+## Connecting to it
+
+Three ways in, depending on whether you want zero setup, a local build, or your own deployment.
+
+### 1. Hosted instance — nothing to install
+
+A public instance runs at:
+
+```
+https://x402-algorand-mcp.fly.dev/mcp
+```
+
+**Claude Code:**
+
+```sh
+claude mcp add --transport http x402-algorand https://x402-algorand-mcp.fly.dev/mcp
+```
+
+**Claude Desktop** — *Settings → Connectors → Add custom connector*, and paste the same URL. On
+builds without custom connectors, bridge it through stdio in `claude_desktop_config.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "x402-algorand": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://x402-algorand-mcp.fly.dev/mcp"]
+    }
+  }
+}
+```
+
+**Any MCP client** that speaks Streamable HTTP can point at the URL directly.
+
+Then ask *"what x402 merchants are available on Algorand?"* or *"what does merchant X offer?"*.
+
+> The hosted instance is unauthenticated and offered as-is, with a spend ceiling of 1 USDC per
+> payment. It holds no keys and cannot move funds — every payment still requires a signature from
+> your own signer. For anything you depend on, deploy your own (below).
+
+### 2. Run it locally over stdio
+
+Best for development, or if you would rather not send endpoint URLs through someone else's server.
 
 ```sh
 pnpm install
-cp .env.example .env     # optional; sensible defaults apply without it
 pnpm build
-pnpm start               # Streamable HTTP on :3000/mcp
 ```
+
+**Claude Code:**
+
+```sh
+claude mcp add x402-algorand -e MCP_TRANSPORT=stdio -- node "$PWD/dist/index.js"
+```
+
+**Claude Desktop** — add to `claude_desktop_config.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "x402-algorand": {
+      "command": "/usr/local/bin/node",
+      "args": ["/absolute/path/to/X402-Algorand-MCP/dist/index.js"],
+      "env": { "MCP_TRANSPORT": "stdio" }
+    }
+  }
+}
+```
+
+Two things that trip people up here. Use an **absolute path to `node`** — Claude Desktop launches
+servers with a minimal `PATH` that often excludes Homebrew, and a bare `node` silently fails to
+start. And because the client spawns the server with its own working directory, **a `.env` file is
+not read**; put configuration in the `env` block instead. (`pnpm start` and `pnpm start:stdio` do
+read `.env`, since they run from the project root.)
+
+Restart Claude Desktop fully (⌘Q on macOS) after editing the config.
+
+### 3. Deploy your own
+
+See [Deployment](#deployment).
 
 ## Choosing a network
 
@@ -108,46 +189,28 @@ Omit `network` and the server uses `X402_DEFAULT_NETWORK` as a *preference*, fal
 whatever the endpoint offers. The catalog currently holds ~643 MainNet and ~37 TestNet endpoints;
 TestNet ones price in TestNet USDC (ASA `10458941`), so they cost nothing real to exercise.
 
-## Testing locally
+## Testing
 
-The server runs over stdio, so you can attach it to any desktop MCP client as a local server.
+Exercise everything end to end against the live catalog, no MCP client needed. Both scripts stop at
+the point where signable bytes are produced, so neither ever spends.
 
-**Claude Code:**
-
-```sh
-pnpm build
-claude mcp add x402-algorand -e MCP_TRANSPORT=stdio -- node "$PWD/dist/index.js"
-```
-
-**Claude Desktop** — add to `claude_desktop_config.json`:
-
-```jsonc
-{
-  "mcpServers": {
-    "x402-algorand": {
-      "command": "node",
-      "args": ["/absolute/path/to/X402-Algorand-MCP/dist/index.js"],
-      "env": { "MCP_TRANSPORT": "stdio" }
-    }
-  }
-}
-```
-
-Then ask it things like *"what x402 merchants are available on Algorand?"* or *"what does merchant
-X offer?"*.
-
-> An MCP client spawns the server with its own working directory, so a `.env` file will not be
-> picked up. Pass configuration through the client's `env` block instead. `pnpm start` and
-> `pnpm start:stdio` do read `.env`, since they run from the project root.
-
-**Without a client**, exercise everything end to end against the live catalog. This stops at the
-point where signable bytes are produced, so it never spends:
+Against a local build:
 
 ```sh
 pnpm build && pnpm smoke
 # or pin a network and endpoint:
 node scripts/smoke.mjs <payerAddress> https://gateway-x402.vercel.app/discover
 ```
+
+Against a deployed instance, over Streamable HTTP:
+
+```sh
+node scripts/verify-remote.mjs                             # the hosted instance
+node scripts/verify-remote.mjs https://your-app.fly.dev     # your own
+```
+
+`verify-remote.mjs` doubles as a session-affinity check: `prepare_payment` parks state on one
+machine, so it only succeeds if the session kept reaching the same instance.
 
 Any syntactically valid Algorand address works for `prepare_payment` — the transaction group is
 built but never signed or submitted.
@@ -172,6 +235,11 @@ See [`.env.example`](./.env.example). The values worth knowing:
 | `X402_MAX_AMOUNT_ATOMIC` | `1000000` | Server-side spend ceiling, in atomic units. |
 | `X402_ALLOWED_ASSETS` | *(any)* | Comma-separated ASA IDs. |
 | `X402_PENDING_TTL_MS` | `300000` | How long a prepared payment waits for signatures. |
+| `X402_MAX_PENDING_PAYMENTS` | `16` | Payments one session may park awaiting signature. |
+| `X402_UPSTREAM_TIMEOUT_MS` | `30000` | Timeout for calls to merchant endpoints. |
+| `X402_MAX_REDIRECTS` | `3` | Redirect hops followed, each re-validated. |
+| `MCP_MAX_SESSIONS` | `256` | Concurrent sessions before new ones are refused. |
+| `X402_ALLOW_PRIVATE_EGRESS` | `false` | Permit requests to private IPs. **Development only.** |
 
 The spend guardrails are a **backstop, not the primary control**. The signer enforces its own policy
 and is the only party that can actually authorize a spend.
@@ -187,23 +255,55 @@ It has no native dependencies and needs no WebRTC, so it runs anywhere Node 20.1
 
 ### Fly.io
 
-[`fly.toml`](./fly.toml) and the [`Dockerfile`](./Dockerfile) are ready to go:
+[`fly.toml`](./fly.toml) and the [`Dockerfile`](./Dockerfile) are ready to go.
 
 ```sh
-fly launch --no-deploy    # first time only; keep the existing fly.toml
+fly launch --no-deploy       # first run only — keep the committed fly.toml
 fly deploy
+fly scale count 1            # exactly one machine; see below
+node scripts/verify-remote.mjs https://your-app.fly.dev
 ```
 
-`auto_stop_machines = false` and `min_machines_running = 1` are set deliberately: a stopped machine
-loses every parked payment, and an MCP session's SSE stream dies with it.
+Change `app` in `fly.toml` to your own name first. Your instance is then at
+`https://your-app.fly.dev/mcp`.
 
-Verify the image locally before pushing, which is faster than debugging a remote build:
+**Do not accept Fly's generated `fly.toml` over the committed one.** Its template sets
+`auto_stop_machines = 'stop'` and `min_machines_running = 0`, which is a correctness bug here rather
+than a cost setting: a stopped machine drops every parked payment and kills live MCP sessions, so
+users see payments that silently never complete. Keep:
+
+```toml
+auto_stop_machines = 'off'
+min_machines_running = 1
+```
+
+For the same reason, stay at **one machine**. Sessions load-balanced across two will prepare a
+payment on one and submit to the other, which fails.
+
+Verify the image locally before pushing — faster than debugging a remote build:
 
 ```sh
 docker build -t x402-algorand-mcp .
 docker run --rm -p 3000:3000 x402-algorand-mcp
 curl localhost:3000/health
 ```
+
+### Continuous deployment
+
+[`.github/workflows/fly-deploy.yml`](./.github/workflows/fly-deploy.yml) typechecks and tests, then
+deploys on every push to `main`. It needs one secret:
+
+```sh
+fly tokens create deploy -x 999999h    # run in a real terminal
+gh secret set FLY_API_TOKEN            # paste at the prompt
+```
+
+### Exposing it publicly
+
+The server has no authentication by design — it holds no keys and cannot move funds without an
+external signature. Before advertising an instance, consider adding **rate limiting at the edge**
+(Fly, Cloudflare); it is the one abuse control not implemented in the app. See
+[Security](#security).
 
 ### pnpm version pinning
 
