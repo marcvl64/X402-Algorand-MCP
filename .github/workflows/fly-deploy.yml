@@ -1,0 +1,43 @@
+name: Fly Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Never let two deploys race; a later push should win rather than interleave.
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the pnpm version from the `packageManager` field, so CI uses the
+      # same version that wrote the lockfile.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  deploy:
+    name: Deploy to Fly
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

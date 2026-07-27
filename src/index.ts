@@ -33,6 +33,25 @@ async function runHttp(): Promise<void> {
   // run a single instance, or use sticky sessions behind a load balancer.
   const sessions = new Map<string, StreamableHTTPServerTransport>();
 
+  // Service description. Without this, `/` 404s and anything probing the root —
+  // uptime checks, platform smoke tests, a human pasting the URL — reports the
+  // deployment as broken while it is in fact healthy.
+  app.get('/', (_req, res) => {
+    res.json({
+      name: SERVER_NAME,
+      version: SERVER_VERSION,
+      description:
+        'Discover x402 payment-gated endpoints on Algorand and pay for them. Holds no keys.',
+      protocol: 'Model Context Protocol',
+      transport: 'streamable-http',
+      endpoints: {
+        mcp: '/mcp',
+        health: '/health',
+      },
+      repository: 'https://github.com/marcvl64/X402-Algorand-MCP',
+    });
+  });
+
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', name: SERVER_NAME, version: SERVER_VERSION });
   });
