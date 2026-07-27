@@ -11,6 +11,16 @@ export interface Config {
   /** Empty set means "any asset is allowed". */
   readonly allowedAssets: ReadonlySet<string>;
   readonly pendingTtlMs: number;
+  /** Max payments a single session may hold awaiting signature. */
+  readonly maxPendingPayments: number;
+  /** Per-request timeout for outbound calls to merchant endpoints. */
+  readonly upstreamTimeoutMs: number;
+  readonly maxRedirects: number;
+  /**
+   * Allow outbound requests into private address space. Development only —
+   * on a public instance this turns the server into an SSRF pivot.
+   */
+  readonly allowPrivateEgress: boolean;
 }
 
 function str(name: string, fallback: string): string {
@@ -36,6 +46,15 @@ function bigint(name: string, fallback: bigint): bigint {
   } catch {
     throw new Error(`${name} must be an integer, got: ${raw}`);
   }
+}
+
+function bool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const value = raw.trim().toLowerCase();
+  if (value === 'true' || value === '1' || value === 'yes') return true;
+  if (value === 'false' || value === '0' || value === 'no') return false;
+  throw new Error(`${name} must be a boolean, got: ${raw}`);
 }
 
 function csv(name: string): ReadonlySet<string> {
@@ -69,5 +88,9 @@ export function loadConfig(): Config {
     maxAmountAtomic: bigint('X402_MAX_AMOUNT_ATOMIC', 1_000_000n),
     allowedAssets: csv('X402_ALLOWED_ASSETS'),
     pendingTtlMs: int('X402_PENDING_TTL_MS', 300_000),
+    maxPendingPayments: int('X402_MAX_PENDING_PAYMENTS', 16),
+    upstreamTimeoutMs: int('X402_UPSTREAM_TIMEOUT_MS', 30_000),
+    maxRedirects: int('X402_MAX_REDIRECTS', 3),
+    allowPrivateEgress: bool('X402_ALLOW_PRIVATE_EGRESS', false),
   };
 }

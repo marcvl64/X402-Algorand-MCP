@@ -32,6 +32,7 @@ async function runHttp(): Promise<void> {
   // its signatures arrive, so a session must keep hitting the same instance —
   // run a single instance, or use sticky sessions behind a load balancer.
   const sessions = new Map<string, StreamableHTTPServerTransport>();
+  const MAX_SESSIONS = Number(process.env['MCP_MAX_SESSIONS'] ?? 256);
 
   // Service description. Without this, `/` 404s and anything probing the root —
   // uptime checks, platform smoke tests, a human pasting the URL — reports the
@@ -69,6 +70,17 @@ async function runHttp(): Promise<void> {
       res.status(400).json({
         jsonrpc: '2.0',
         error: { code: -32000, message: 'No valid session. Send an initialize request first.' },
+        id: null,
+      });
+      return;
+    }
+
+    // Anyone may open a session, so refuse new ones past a ceiling rather than
+    // letting the map grow until the machine runs out of memory.
+    if (sessions.size >= MAX_SESSIONS) {
+      res.status(503).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Server at session capacity. Try again shortly.' },
         id: null,
       });
       return;

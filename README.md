@@ -212,6 +212,35 @@ whatever is current — recent pnpm reads `onlyBuiltDependencies` from `pnpm-wor
 than `package.json`, so a container would fail `pnpm install` with `ERR_PNPM_IGNORED_BUILDS` while
 the same command succeeded locally. Bump the pin and the lockfile together.
 
+## Security
+
+The server is designed to run as a public, unauthenticated instance, so it treats both the caller
+and the merchant endpoint as hostile.
+
+**Signing requests cannot be spoofed.** The description a human reads before approving is built from
+the *decoded transaction*, never from the merchant's 402 challenge — the transaction is what gets
+signed; the challenge is only a claim about it. Merchant-supplied text is stripped of newlines,
+control characters and bidi overrides, truncated, quoted, and confined below an
+`--- unverified merchant text ---` marker. Without this, a merchant could embed a newline in a
+`description` field and forge a `Paying …` line, showing one amount while the user signs another.
+
+Before any signature is requested, the built transaction is checked against the quote that spend
+limits were applied to. A mismatch in asset, recipient, or amount aborts the payment.
+
+**Outbound requests are constrained.** `prepare_payment` fetches a caller-supplied URL, so every
+target is resolved and every resolved address checked against non-public ranges — including
+loopback, RFC1918, link-local (cloud metadata), CGNAT, and IPv6 ULA, which covers Fly's `fdaa::/16`
+private network where `*.internal` names reach other apps in your organisation. Redirects are
+followed manually so each hop is re-validated, defeating redirect-based bypasses. Only `http(s)` is
+allowed. Set `X402_ALLOW_PRIVATE_EGRESS=true` for local development only.
+
+**Resources are bounded.** Response bodies are read with a hard cap rather than buffered whole,
+outbound requests time out, and both parked payments and concurrent sessions are capped.
+
+Not implemented: rate limiting. Put it at the edge if you expose this widely.
+
+The server holds no keys, so nothing it does can move funds without an external signature.
+
 ## Development
 
 ```sh

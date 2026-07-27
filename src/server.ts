@@ -21,6 +21,7 @@ import {
   SUPPORTED_NETWORKS,
 } from './x402/payment.js';
 import { PendingPaymentStore } from './x402/pending.js';
+import { createSafeFetch } from './security/safe-fetch.js';
 
 /**
  * Accepts friendly aliases as well as full CAIP-2 ids. Algorand's CAIP-2 form
@@ -73,11 +74,21 @@ export interface ServerDeps {
 }
 
 export function createDeps(config: Config): ServerDeps {
-  const pending = new PendingPaymentStore(config.pendingTtlMs);
+  const pending = new PendingPaymentStore(config.pendingTtlMs, config.maxPendingPayments);
+
+  // Merchant endpoints are caller-supplied and therefore untrusted: guard the
+  // target, bound the time, and re-validate every redirect. The facilitator is
+  // operator-configured, so discovery only needs a timeout.
+  const merchantFetch = createSafeFetch({
+    timeoutMs: config.upstreamTimeoutMs,
+    maxRedirects: config.maxRedirects,
+    allowPrivate: config.allowPrivateEgress,
+  });
+
   return {
     config,
     discovery: new DiscoveryClient(config.facilitatorUrl),
-    payments: new PaymentService(config, pending),
+    payments: new PaymentService(config, pending, merchantFetch),
     pending,
   };
 }

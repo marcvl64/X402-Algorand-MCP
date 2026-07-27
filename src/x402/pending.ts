@@ -25,7 +25,7 @@ import {
 import type { PaymentRequirements, ResourceInfo } from '@x402/core/types';
 import type { ClientAvmSigner } from '@x402/avm';
 
-import { buildSigningDescription } from './summary.js';
+import { buildSigningDescription, transactionFacts } from './summary.js';
 
 /** Schema identifier for the payload carried in a signing request. */
 export const ALGORAND_SIGNING_SCHEMA = 'x402/exact/algorand/v2/transaction-signing-bytes';
@@ -54,6 +54,22 @@ export class SigningRejectedError extends Error {
   constructor(reason: string) {
     super(`x402 payment signing rejected: ${reason}`);
     this.name = 'SigningRejectedError';
+  }
+}
+
+/**
+ * Raised when the transaction that was built does not move what the endpoint
+ * quoted. Policy is enforced against the quote, so a transaction that diverges
+ * from it has escaped those limits and must never reach a signer.
+ */
+export class QuoteMismatchError extends Error {
+  readonly code = 'quote_mismatch' as const;
+  constructor(field: string, quoted: string, actual: string) {
+    super(
+      `Built transaction does not match the quoted payment: ${field} was quoted as ${quoted} ` +
+        `but the transaction specifies ${actual}. Refusing to request a signature.`,
+    );
+    this.name = 'QuoteMismatchError';
   }
 }
 
@@ -109,6 +125,41 @@ function deferred<T>(): Deferred<T> {
 export interface PaymentContext {
   readonly requirements?: PaymentRequirements;
   readonly resource?: ResourceInfo;
+}
+
+/**
+ * Cross-checks the built transaction against the quote that policy was applied
+ * to. Spend limits are enforced against the quote in the requirements selector;
+ * if the transaction moves something else, those limits mean nothing.
+ *
+ * Only the payer's own outgoing transfer is checked — a group may also contain
+ * a fee-payer transaction signed by the facilitator, which moves nothing on the
+ * payer's behalf.
+ */
+export function assertMatchesQuote(
+  txn: Transaction,
+  requirements: PaymentRequirements | undefined,
+): void {
+  if (!requirements) return;
+  const facts = transactionFacts(txn);
+  if (facts.amount === undefined) return; // not a value transfer
+
+  if (facts.asset !== undefined && facts.asset !== requirements.asset) {
+    throw new QuoteMismatchError('asset', requirements.asset, facts.asset);
+  }
+  if (facts.receiver !== undefined && facts.receiver !== requirements.payTo) {
+    throw new QuoteMismatchError('recipient', requirements.payTo, facts.receiver);
+  }
+
+  let quoted: bigint;
+  try {
+    quoted = BigInt(requirements.amount);
+  } catch {
+    throw new QuoteMismatchError('amount', requirements.amount, facts.amount.toString());
+  }
+  if (facts.amount > quoted) {
+    throw new QuoteMismatchError('amount', quoted.toString(), facts.amount.toString());
+  }
 }
 
 /**
@@ -178,6 +229,7 @@ export class DeferredSigner implements ClientAvmSigner {
       }
 
       const context = this.getContext();
+      assertMatchesQuote(txn, context.requirements);
       this.decodedTxns.push({ index: i, txn });
       requests.push({
         index: i,
@@ -230,12 +282,38 @@ export interface PendingPayment {
  * Algorand transaction validity windows mean an unsigned group is worthless
  * within a few minutes.
  */
+export class TooManyPendingPaymentsError extends Error {
+  readonly code = 'too_many_pending_payments' as const;
+  constructor(limit: number) {
+    super(
+      `This session already has ${limit} payments awaiting signature. ` +
+        'Submit or abandon one before preparing another.',
+    );
+    this.name = 'TooManyPendingPaymentsError';
+  }
+}
+
 export class PendingPaymentStore {
   private readonly entries = new Map<string, { payment: PendingPayment; timer: NodeJS.Timeout }>();
 
-  constructor(private readonly ttlMs: number) {}
+  constructor(
+    private readonly ttlMs: number,
+    /**
+     * Each parked payment holds an open upstream connection, so an uncapped
+     * store lets a caller exhaust sockets and memory just by repeating
+     * prepare_payment.
+     */
+    private readonly maxEntries = 16,
+  ) {}
+
+  get size(): number {
+    return this.entries.size;
+  }
 
   add(payment: PendingPayment): void {
+    if (this.entries.size >= this.maxEntries) {
+      throw new TooManyPendingPaymentsError(this.maxEntries);
+    }
     const timer = setTimeout(() => {
       this.entries.delete(payment.id);
       payment.signer.abort(new PaymentExpiredError(payment.id));

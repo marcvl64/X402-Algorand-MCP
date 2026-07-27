@@ -31,6 +31,7 @@ import {
   type SubmittedSignature,
 } from './pending.js';
 import { isAlgorandCaip2, toPriceSummary, type PriceSummary } from '../discovery.js';
+import { readBodyCapped } from '../security/safe-fetch.js';
 
 export class PaymentPolicyError extends Error {
   readonly code = 'payment_policy_violation' as const;
@@ -129,7 +130,10 @@ async function describeResponse(
   paid: boolean,
 ): Promise<CompletedRequest> {
   const contentType = response.headers.get('content-type');
-  const text = (await response.text()).slice(0, RESPONSE_BODY_LIMIT_BYTES);
+  // Capped read: `response.text()` would buffer the whole body first, so a
+  // hostile endpoint streaming gigabytes could exhaust memory before any limit
+  // took effect.
+  const text = await readBodyCapped(response, RESPONSE_BODY_LIMIT_BYTES);
 
   let body: Pick<CompletedRequest, 'body_text' | 'body_json'> = { body_text: text };
   if (contentType?.includes('application/json')) {
