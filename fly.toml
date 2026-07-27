@@ -1,42 +1,50 @@
-app = "x402-algorand-mcp"
-primary_region = "iad"
+# fly.toml app configuration file for x402-algorand-mcp
+#
+# See https://fly.io/docs/reference/configuration/
+
+app = 'x402-algorand-mcp'
+primary_region = 'sjc'
 
 [build]
 
 [env]
-  MCP_TRANSPORT = "http"
-  PORT = "3000"
-  X402_FACILITATOR_URL = "https://facilitator.goplausible.xyz"
-  X402_DEFAULT_NETWORK = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="
-  ALGOD_URL = "https://mainnet-api.algonode.cloud"
-  # Spend ceiling in atomic units. A backstop only — the server holds no keys
-  # and nothing can be spent without an external signature.
-  X402_MAX_AMOUNT_ATOMIC = "1000000"
-  X402_PENDING_TTL_MS = "300000"
+  ALGOD_URL = 'https://mainnet-api.algonode.cloud'
+  MCP_TRANSPORT = 'http'
+  PORT = '3000'
+  X402_DEFAULT_NETWORK = 'algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8='
+  X402_FACILITATOR_URL = 'https://facilitator.goplausible.xyz'
+  # Spend ceiling in atomic units. A backstop only — the server holds no keys,
+  # so nothing can be spent without an external signature.
+  X402_MAX_AMOUNT_ATOMIC = '1000000'
+  X402_PENDING_TTL_MS = '300000'
 
 [http_service]
   internal_port = 3000
   force_https = true
 
-  # A prepared payment lives in memory on one instance until its signatures
-  # arrive, and MCP sessions hold an open SSE stream. Both break if a session
-  # is load-balanced elsewhere, so the machine must stay up and stay single.
-  auto_stop_machines = false
+  # Do not change these two without reading on.
+  #
+  # A prepared payment lives in memory on one machine until its signatures
+  # arrive, and every MCP session holds an open SSE stream. Stopping a machine
+  # drops both: users see payments that silently never complete. Fly's default
+  # template sets auto_stop_machines to 'stop' and min_machines_running to 0,
+  # which is a correctness bug for this server, not a cost setting.
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
 
   [http_service.concurrency]
-    type = "requests"
-    soft_limit = 200
+    type = 'requests'
     hard_limit = 250
+    soft_limit = 200
 
-[[http_service.checks]]
-  interval = "30s"
-  timeout = "5s"
-  grace_period = "10s"
-  method = "GET"
-  path = "/health"
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/health'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
+  size = 'shared-cpu-1x'
+  memory = '512mb'
