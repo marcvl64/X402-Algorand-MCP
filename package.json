@@ -22,7 +22,7 @@
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
-    "@algorandfoundation/algokit-utils": "10.0.0-beta.4",
+    "@algorandfoundation/algokit-utils": "10.0.0-alpha.46",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "@x402/avm": "^2.19.0",
     "@x402/core": "^2.19.0",

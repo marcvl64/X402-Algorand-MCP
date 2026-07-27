@@ -33,6 +33,8 @@ export const ALGORAND_SIGNING_SCHEMA = 'x402/exact/algorand/v2/transaction-signi
 export interface SigningRequest {
   /** Index within the transaction group. Echo this back in the signature. */
   readonly index: number;
+  /** Last round this transaction is valid for. After it, the payment is dead. */
+  readonly valid_until_round?: string;
   /** Raw bytes to sign, base64. Sign these directly with Ed25519. */
   readonly payload_base64: string;
   /** Plain-language description of what signing authorizes. */
@@ -231,8 +233,10 @@ export class DeferredSigner implements ClientAvmSigner {
       const context = this.getContext();
       assertMatchesQuote(txn, context.requirements);
       this.decodedTxns.push({ index: i, txn });
+      const lastValid = (txn as { lastValid?: bigint }).lastValid;
       requests.push({
         index: i,
+        ...(lastValid !== undefined ? { valid_until_round: lastValid.toString() } : {}),
         payload_base64: base64(bytesForSigning.transaction(txn)),
         description: buildSigningDescription({
           txn,

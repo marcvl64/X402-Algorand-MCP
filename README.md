@@ -66,6 +66,22 @@ signature.* Nothing in this codebase imports an AC2 SDK or knows which of these 
 > `schema`, `sig_hint`) so the AC2 path is a direct field mapping — but that is a convenience, not a
 > coupling.
 
+### Timing
+
+A payment spans several agent turns — read the challenge, call a wallet, wait for approval, submit.
+Each is an LLM round trip, and a human approval sits in the middle, so **minutes are normal**. The
+server itself answers `prepare_payment` in about a second; the latency is the agent loop, not the
+transport.
+
+The transaction's validity window is therefore sized to match. algokit's composer defaults to 10
+rounds (~29 seconds), which suits a script signing locally in milliseconds but expires long before
+an agent finishes. This server derives the window from `X402_PENDING_TTL_MS` instead — five minutes
+of TTL yields ~115 rounds — so a payment the server still accepts is one the chain still accepts.
+`signing_requests[].valid_until_round` tells you the deadline.
+
+If settlements still expire, raise `X402_PENDING_TTL_MS`; the window follows it, up to the protocol
+maximum of 1000 rounds (~48 minutes).
+
 ### Why two steps rather than one
 
 An Algorand transaction group is built with fixed validity rounds and a group ID. It cannot be

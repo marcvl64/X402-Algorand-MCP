@@ -17,6 +17,7 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { AlgorandClient } from '@algorandfoundation/algokit-utils/algorand-client';
 import { ExactAvmScheme } from '@x402/avm/exact/client';
 import { x402Client } from '@x402/core/client';
 import { wrapFetchWithPayment } from '@x402/fetch';
@@ -175,6 +176,34 @@ export interface RequestSpec {
 export const ALGORAND_MAINNET_CAIP2 = 'algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=';
 export const ALGORAND_TESTNET_CAIP2 = 'algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=';
 
+/** Approximate Algorand block time. Used only to size the validity window. */
+const SECONDS_PER_ROUND = 2.9;
+
+/** Protocol ceiling on how far ahead a transaction may remain valid. */
+const MAX_VALIDITY_ROUNDS = 1000;
+
+/**
+ * How many rounds a payment must stay valid for.
+ *
+ * algokit's composer defaults to a 10-round window — roughly 29 seconds. That
+ * suits a script that signs locally in milliseconds, but not this flow, where
+ * the transaction is built and then waits on an agent and quite possibly a
+ * human: reading the challenge, calling a wallet, approving, submitting. Each
+ * of those is an LLM round trip, so minutes are normal and a 29-second window
+ * expires long before the signature arrives.
+ *
+ * Deriving it from the pending TTL keeps the two from disagreeing: a payment
+ * the server is still willing to accept is a payment the chain will still
+ * accept.
+ */
+export function validityRoundsFor(pendingTtlMs: number): number {
+  const rounds = Math.ceil(pendingTtlMs / 1000 / SECONDS_PER_ROUND);
+  // A margin covers block-time variance and the round drift between building
+  // the group and the network seeing it.
+  const withMargin = rounds + 10;
+  return Math.min(Math.max(withMargin, 10), MAX_VALIDITY_ROUNDS);
+}
+
 /** Public AlgoNode endpoints, used unless the operator overrides ALGOD_URL. */
 const ALGOD_DEFAULTS: Record<string, string> = {
   [ALGORAND_MAINNET_CAIP2]: 'https://mainnet-api.algonode.cloud',
@@ -185,6 +214,9 @@ const ALGOD_DEFAULTS: Record<string, string> = {
 export const SUPPORTED_NETWORKS = [ALGORAND_MAINNET_CAIP2, ALGORAND_TESTNET_CAIP2] as const;
 
 export class PaymentService {
+  /** One client per network; each carries the widened validity window. */
+  private readonly algorandClients = new Map<string, AlgorandClient>();
+
   constructor(
     private readonly config: Config,
     private readonly pending: PendingPaymentStore,
@@ -197,12 +229,24 @@ export class PaymentService {
    * is registered up front; the selector then picks among whatever the endpoint
    * actually offers.
    */
-  private algodFor(network: string): { algodUrl: string; algodToken: string } {
-    const url =
+  private algorandClientFor(network: string): AlgorandClient {
+    const cached = this.algorandClients.get(network);
+    if (cached) return cached;
+
+    const server =
       network === this.config.defaultNetwork
         ? this.config.algodUrl
         : (ALGOD_DEFAULTS[network] ?? this.config.algodUrl);
-    return { algodUrl: url, algodToken: this.config.algodToken };
+
+    // Passing a pre-built client is the only way to widen the validity window:
+    // ExactAvmScheme builds through a composer that would otherwise inherit
+    // algokit's 10-round (~29s) default.
+    const client = AlgorandClient.fromConfig({
+      algodConfig: { server, token: this.config.algodToken },
+    }).setDefaultValidityWindow(validityRoundsFor(this.config.pendingTtlMs));
+
+    this.algorandClients.set(network, client);
+    return client;
   }
 
   /**
@@ -230,7 +274,9 @@ export class PaymentService {
       schemes: [...new Set(networks)].map((network) => ({
         // CAIP-2 identifiers always contain a colon, satisfying `Network`.
         network: network as Network,
-        client: new ExactAvmScheme(signer, this.algodFor(network)),
+        client: new ExactAvmScheme(signer, {
+          algorandClient: this.algorandClientFor(network),
+        }),
       })),
       // Runs once the 402 is parsed, before the scheme builds anything. This is
       // where the payment option is chosen and vetted.
